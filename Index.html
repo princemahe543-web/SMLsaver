@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Persistent Link Saver</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #2f3e5b;
+        }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen">
+
+    <!-- Top Menu Bar -->
+    <nav id="appHeader" class="bg-slate-900 shadow-lg sticky top-0 z-50 hidden">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <span class="text-xl font-bold text-white">Link Saver</span>
+            <button id="signOutBtn" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg shadow-md transition duration-300 transform hover:scale-105">
+                Sign Out
+            </button>
+        </div>
+    </nav>
+
+    <!-- Authentication Page -->
+    <div id="authPage" class="flex flex-1 items-center justify-center p-4">
+        <div class="bg-slate-800 text-gray-200 p-8 rounded-xl shadow-2xl w-full max-w-sm mx-auto border border-slate-700 text-center">
+            
+            <!-- Login Form -->
+            <div id="loginForm" class="auth-form">
+                <h1 class="text-3xl font-bold text-white mb-6">Log In</h1>
+                <form id="login" onsubmit="event.preventDefault(); handleLogin();">
+                    <input type="text" id="loginName" placeholder="Your Name" required
+                           class="w-full p-3 rounded-lg bg-slate-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-6 transition duration-300">
+                    <button type="submit"
+                            class="bg-blue-600 hover:bg-blue-700 text-white font-medium p-3 w-full rounded-lg shadow-lg transition duration-300 transform hover:scale-105">
+                        Log In
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App Page -->
+    <div id="mainApp" class="flex flex-1 items-center justify-center p-4 hidden">
+        <div class="bg-slate-800 text-gray-200 p-8 rounded-xl shadow-2xl w-full max-w-2xl mx-auto border border-slate-700">
+            <h1 id="greetingText" class="text-3xl font-bold text-white text-center mb-4">🔗Enter any social media links here..!🔗</h1>
+
+            <!-- Status and Result Display -->
+            <div class="mb-6 text-center text-lg font-medium">
+                <span id="statusMessage"></span>
+            </div>
+
+            <!-- Main Input and Button Section -->
+            <div class="flex flex-col sm:flex-row gap-4 mb-8">
+                <input type="text" id="linkInput" placeholder="Enter Social Media Link Here..."
+                       class="flex-1 p-3 rounded-lg bg-slate-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-300">
+                <button id="checkLinkBtn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-medium p-3 rounded-lg shadow-lg transition duration-300 transform hover:scale-105">
+                    Check & Save Link
+                </button>
+            </div>
+            
+            <p id="userIdDisplay" class="text-xs text-center text-gray-400 mt-4 break-all"></p>
+        </div>
+    </div>
+
+    <!-- Custom Modal for Alerts -->
+    <div id="customModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-slate-700 text-white p-6 rounded-lg shadow-xl w-80">
+            <p id="modalMessage" class="mb-4 text-center"></p>
+            <button onclick="closeModal()" class="w-full bg-blue-600 hover:bg-blue-700 p-2 rounded-lg font-medium">OK</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Globals (Provided by Environment) ---
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- UI Element References ---
+        const authPage = document.getElementById('authPage');
+        const mainApp = document.getElementById('mainApp');
+        const appHeader = document.getElementById('appHeader');
+        const signOutBtn = document.getElementById('signOutBtn');
+        const linkInput = document.getElementById('linkInput');
+        const checkLinkBtn = document.getElementById('checkLinkBtn');
+        const statusMessage = document.getElementById('statusMessage');
+        const customModal = document.getElementById('customModal');
+        const modalMessage = document.getElementById('modalMessage');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const greetingText = document.getElementById('greetingText');
+        const loginNameInput = document.getElementById('loginName');
+
+        // --- App State ---
+        let db;
+        let auth;
+        let savedLinks = [];
+        let unsubscribeFromFirestore = null;
+        let userName = localStorage.getItem('userName') || 'Your name';
+
+        // --- Firebase Initialization and Auth Listener ---
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    authPage.classList.add('hidden');
+                    mainApp.classList.remove('hidden');
+                    appHeader.classList.remove('hidden');
+                    userIdDisplay.textContent = `User ID: ${user.uid}`;
+                    fetchLinks(user.uid);
+                } else {
+                    authPage.classList.remove('hidden');
+                    mainApp.classList.add('hidden');
+                    appHeader.classList.add('hidden');
+                    if (unsubscribeFromFirestore) {
+                        unsubscribeFromFirestore();
+                    }
+                }
+            });
+        } catch (error) {
+            console.error("Firebase initialization failed: ", error);
+            showModal("Failed to connect to the database. Please try again.");
+        }
+
+        // --- Authentication Handlers ---
+        async function handleLogin() {
+            const name = loginNameInput.value.trim();
+            
+            if (!name) {
+                showModal("Please enter your name.");
+                return;
+            }
+
+            try {
+                 if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                 } else {
+                    await signInAnonymously(auth);
+                 }
+                localStorage.setItem('userName', name);
+                userName = name;
+                showModal("Login successful!");
+            } catch (error) {
+                console.error("Login failed: ", error);
+                showModal("Login failed. Please try again.");
+            }
+        }
+        
+        // --- Firestore Data Functions ---
+        function fetchLinks(userId) {
+            try {
+                const linksCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/links`);
+                unsubscribeFromFirestore = onSnapshot(linksCollectionRef, (snapshot) => {
+                    savedLinks = [];
+                    snapshot.forEach((doc) => {
+                        const linkData = doc.data();
+                        if (linkData.url) {
+                            savedLinks.push(linkData.url);
+                        }
+                    });
+                });
+            } catch (error) {
+                console.error("Error fetching links: ", error);
+                showModal("Failed to load links from the database.");
+            }
+        }
+
+        async function saveLinkToFirestore(link) {
+            try {
+                const userId = auth.currentUser.uid;
+                const linksCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/links`);
+                await addDoc(linksCollectionRef, {
+                    url: link,
+                    createdAt: new Date()
+                });
+            } catch (error) {
+                console.error("Error saving link to Firestore: ", error);
+                showModal("Failed to save the link. Please try again.");
+            }
+        }
+
+        // --- UI Utility Functions ---
+        function showModal(message) {
+            modalMessage.textContent = message;
+            customModal.classList.remove('hidden');
+        }
+
+        window.closeModal = function() {
+            customModal.classList.add('hidden');
+        }
+        
+        function setStatus(message, color) {
+            statusMessage.innerHTML = message;
+            statusMessage.style.color = color;
+        }
+
+        // --- Core Link Management Functions ---
+        function validateLink(link) {
+            if (link.trim() === '') {
+                showModal("Please enter a link to check.");
+                return false;
+            }
+            try {
+                new URL(link);
+                return true;
+            } catch (e) {
+                showModal("Please enter a valid URL.");
+                return false;
+            }
+        }
+
+        function checkAndAddLink() {
+            const link = linkInput.value.trim();
+            if (!validateLink(link)) {
+                return;
+            }
+            
+            const personalizedMessage = `<span class="text-white">hey..!👋 ${userName} ❤️</span>`;
+            
+            if (savedLinks.includes(link)) {
+                const message = `${personalizedMessage} <span class="text-red-400">This link is already there!</span>`;
+                setStatus(message, '');
+            } else {
+                saveLinkToFirestore(link);
+                const message = `${personalizedMessage} <span class="text-green-500">This link was not found.</span> <span class="text-fuchsia-400">It has been saved</span>`;
+                setStatus(message, '');
+                linkInput.value = '';
+            }
+        }
+        
+        // --- Event Listeners ---
+        signOutBtn.addEventListener('click', async () => {
+             auth.signOut();
+             savedLinks = [];
+             localStorage.removeItem('userName');
+             userName = 'Your name';
+             if (unsubscribeFromFirestore) {
+                unsubscribeFromFirestore();
+            }
+        });
+
+        checkLinkBtn.addEventListener('click', checkAndAddLink);
+        linkInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                checkAndAddLink();
+            }
+        });
+        
+        // Expose functions to the global scope for form submissions
+        window.handleLogin = handleLogin;
+    </script>
+</body>
+</html>
